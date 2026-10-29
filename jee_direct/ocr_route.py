@@ -7,7 +7,7 @@ from pathlib import Path
 import fitz, numpy as np
 from PIL import Image
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "vendor"))   # copies of the final-pipeline helpers; the original pipeline is not touched
+sys.path.insert(0, str(Path(__file__).resolve().parent)); sys.path.insert(0, str(Path(__file__).resolve().parent / "vendor"))   # copies of the final-pipeline helpers; the original pipeline is not touched
 from cet_figures import split_box, grow, _gaps  # noqa: E402
 from cet_options import split_options  # noqa: E402
 
@@ -210,7 +210,13 @@ def crop(page, box, path, pad=3):
     page.get_pixmap(dpi=200, clip=rect).save(path)
 
 
+POS = {}
+
+
 def main():
+    global POS
+    import os
+    if os.environ.get("POS_JSON"): POS = {q["qid"]: dict(page=q["page"], col=q["col"], y0=q["y0"]) for q in json.load(open(os.environ["POS_JSON"], encoding="utf-8"))["questions"]}
     pdf, ocr, out, figs = sys.argv[1], Path(sys.argv[2]), sys.argv[3], Path(sys.argv[4]); figs.mkdir(parents=True, exist_ok=True)
     doc = fitz.open(pdf); book = Path(pdf).stem; res = []
     for pg in map(int, sys.argv[5:]):
@@ -218,35 +224,20 @@ def main():
         for q in questions(blocks((ocr / f"page_{pg:03d}.txt").read_text(encoding="utf-8")), pg):
             qid = f"{book}_p{pg:03d}_q{q['number']:03d}"; sp = split_options(upper_markers(q["text"])); flags = []
             r = dict(qid=qid, number=q["number"], page=pg, stem_raw=sp["stem"], options_raw=sp["options"], options_status=sp["status"], stem_images=[], option_images={}, flags=flags)
-            boxes = [[v for v in b] for b in q["boxes"]]
-            if boxes:
-                grown = []
-                for b in boxes:                              # OCR boxes are tight and clip edge labels
-                    g = grow(page, fitz.Rect(b[0] / 1000 * page.rect.width, b[1] / 1000 * page.rect.height, b[2] / 1000 * page.rect.width, b[3] / 1000 * page.rect.height))
-                    grown.append([round(g.x0 * 1000 / page.rect.width), round(g.y0 * 1000 / page.rect.height), round(g.x1 * 1000 / page.rect.width), round(g.y1 * 1000 / page.rect.height)])
-                stem_boxes, cells = grown, None
-                if sp["status"] != "ok":                     # no four text options: the pictures may be the options
-                    mc = marker_cells(page, grown, q["col"], q.get("above", 0), q["below"])
-                    if mc == "TEXT":                         # (a)-(d) are printed text lines the OCR dropped: the pictures belong to the stem
-                        stem_boxes, cells = grown, None; flags.append("OPTIONS_TEXT_MISSING_IN_OCR")
-                    elif mc:
-                        stem_boxes, cells = [b for b in grown if b[3] * page.rect.height / 1000 < mc[0].y0 + 2 and b[3] * page.rect.height / 1000 < mc[1].y0], mc
-                    else:
-                        stem_boxes, cells = option_cells(png, grown)
-                    if cells is None and mc != "TEXT": flags.append("PICTURES_NOT_SPLIT_INTO_4")
-                skip = [c for c in (cells or []) if isinstance(c, fitz.Rect)]
-                y_lo_s = (q.get("text_bottom") or 0) / 1000 * page.rect.height + 1; y_hi_s = min(q["below"] / 1000 * page.rect.height, page.rect.height - 22) - 1
-                if cells and isinstance(cells[0], fitz.Rect): y_hi_s = min(y_hi_s, min(c.y0 for c in cells if isinstance(c, fitz.Rect)) - 1)   # picture options start where the stem figure ends
-                for i, o in enumerate(stem_blobs(page, q["col"], y_lo_s, y_hi_s, skip)):
+            pos = POS.get(qid)                                   # born-digital position (column, row) of this question: decides which pictures are its own
+            if pos:
+                import figs2
+                nxt = [v["y0"] for v in POS.values() if v["page"] == pg and v["col"] == pos["col"] and v["y0"] > pos["y0"]]
+                oth = [v["y0"] for v in POS.values() if v["page"] == pg and v["col"] != pos["col"]]
+                H = page.rect.height
+                cont = min(oth) if (pos["col"] == 0 and not nxt and oth) else None            # last question of the left column: options may continue on the right
+                pic = figs2.pictures(page, pos["col"], pos["y0"], min(nxt) - 2 if nxt else H - 24, cont)
+                flags.extend(pic["flags"])
+                for i, o in enumerate(pic["stem"]):
                     p = figs / f"{qid}_fig{i + 1}.png"; page.get_pixmap(dpi=200, clip=o & page.rect).save(p); r["stem_images"].append(p.name)
-                for L, c in zip("ABCD", cells or []):
-                    if c is None: flags.append(f"OPTION_{L}_IS_TEXT"); continue
-                    p = figs / f"{qid}_opt{L}.png"
-                    if isinstance(c, fitz.Rect):
-                        w, h = tight(page, c & page.rect, p)
-                        if w < 60 or h < 40: flags.append(f"OPTION_{L}_IMAGE_TOO_SMALL")            # only its letter was cut: layout not understood
-                    else: crop(page, c, p)
-                    r["option_images"][L] = p.name
+                for L, c in zip("ABCD", pic["opts"] or []):
+                    if c is None: continue
+                    p = figs / f"{qid}_opt{L}.png"; page.get_pixmap(dpi=200, clip=c & page.rect).save(p); r["option_images"][L] = p.name
             if sp["status"] != "ok" and not r["option_images"]: flags.append("OPTIONS_" + sp["status"].upper())
             res.append(r)
     Path(out).write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
