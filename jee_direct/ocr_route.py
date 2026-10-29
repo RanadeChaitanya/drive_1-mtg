@@ -7,7 +7,7 @@ from pathlib import Path
 import fitz, numpy as np
 from PIL import Image
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "claude_pipeline"))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "vendor"))   # copies of the final-pipeline helpers; the original pipeline is not touched
 from cet_figures import split_box, grow, _gaps  # noqa: E402
 from cet_options import split_options  # noqa: E402
 
@@ -77,74 +77,78 @@ def upper_markers(t):
 
 
 def marker_cells(page, boxes, col=0, above=0, below=960):
-    """option pictures cut by the printed (a)-(d) letters (text layer), NOT by the OCR boxes, which tile pictures arbitrarily.
-    Layouts: stacked, one row, 2x2. None when the letters are text-option lines (spacing < 40pt: OCR lost TEXT options, not pictures)."""
-    r = page.rect; rects = [fitz.Rect(b[0] / 1000 * r.width, b[1] / 1000 * r.height, b[2] / 1000 * r.width, b[3] / 1000 * r.height) for b in boxes]
-    U = fitz.Rect(70 if col == 0 else r.width / 2 + 4, max(min(x.y0 for x in rects), above / 1000 * r.height + 2), r.width / 2 - 4 if col == 0 else r.width - 30, max(max(x.y1 for x in rects), 0) + 0)
-    U.y1 = max(U.y1, min(below / 1000 * r.height - 2, U.y1 + 60))
-    mk, prev_y = {}, U.y0 - 6
-    for L in "abcd":                                            # first hit of each letter below the previous one, inside the column, up to 50pt past the boxes
-        hits = [h for h in page.search_for(f"({L})", clip=fitz.Rect(U.x0 - 16, U.y0 - 6, U.x1 + 4, U.y1 + 50)) if h.y0 >= prev_y - 2]
-        if not hits: return None
-        mk[L] = hits[0]; prev_y = hits[0].y0 - 2 if L == "a" else hits[0].y0 - 2
+    """One picture per option, cut from the rendered page, not from OCR boxes (which tile pictures arbitrarily).
+    1. find the printed letters (a)-(d), in this column and, when the options run on, at the head of the next one; 2. render the option area, blank
+    the letters and printed text-option lines; 3. grow the ink 2 pt so a picture and its labels (Br, NO2, C2H5, bond stubs) form ONE blob while
+    neighbouring pictures stay apart; 4. each blob goes to the nearest letter on its left in its row.
+    returns 'TEXT' (options are printed lines), None (letters not found / a picture missing) or four Rects (None for an option that is a text line)."""
+    from scipy import ndimage
+    r = page.rect; H = r.height; mid = r.width / 2
+    xr = {0: (70, mid + 12), 1: (mid + 4, r.width - 12)}
+    y_lo = max(above / 1000 * H, 0) + 1; y_hi = min(below / 1000 * H, H - 22) - 1
+    rects = [fitz.Rect(b[0] / 1000 * r.width, b[1] / 1000 * H, b[2] / 1000 * r.width, b[3] / 1000 * H) for b in boxes]
+    y_first = min(x.y0 for x in rects); oc = 1 - col
+    other = [x for x in rects if (x.x0 + x.x1) / 2 > mid] if col == 0 else [x for x in rects if (x.x0 + x.x1) / 2 <= mid]
+    y_oc = (70, max(x.y1 for x in other) + 10) if other else None   # head of the neighbouring column, where the options continue
     words = page.get_text("words")
-    is_text = {L: any(abs(w[1] - mk[L].y0) < 3 and 0 <= w[0] - mk[L].x1 < 16 for w in words) for L in "abcd"}   # a word right after the letter = a printed text option
-    if sum(is_text.values()) >= 2: return "TEXT"                     # the options are text lines (OCR lost them): not pictures
-    ys = [mk[L].y0 for L in "abcd"]; xs = [mk[L].x0 for L in "abcd"]
-    U = fitz.Rect(U.x0, U.y0, U.x1, min(max(U.y1, ys[3] + 70), below / 1000 * r.height - 2)) if max(xs) - min(xs) < 20 else U
-    ink = lambda R: np.array(page.get_pixmap(dpi=144, clip=R & page.rect, colorspace=fitz.csGRAY).pil_image()) < 200
-
-    def cut(axis, lo, hi, fallback):
-        """centre of the widest blank band between lo and hi (points) along an axis; the label of one picture must not be sliced by a midpoint"""
-        if hi - lo < 6: return fallback
-        R = fitz.Rect(U.x0, lo, U.x1, hi) if axis == "y" else fitz.Rect(lo, U.y0, hi, U.y1)
-        a = ink(R); prof = a.any(axis=1) if axis == "y" else a.any(axis=0); bands, run, start = [], 0, 0
-        for i, v in enumerate(list(prof) + [True]):
-            if not v:
-                if run == 0: start = i
-                run += 1
-            else:
-                if run: bands.append((start, run))
-                run = 0
-        if axis == "y":                                         # rows: the LAST band, so a label under its own picture ('Br', 'NO2') stays with it
-            ok = [b for b in bands if b[1] >= 10]; best = ok[-1] if ok else (max(bands, key=lambda b: b[1]) if bands else None)
-        else:                                                   # columns: the widest band
-            best = max(bands, key=lambda b: b[1]) if bands else None
-        return fallback if best is None else lo + (best[0] + best[1] / 2) * 72 / 144
-
-    above_figs = [x.y1 for x in rects if x.y1 < ys[0] - 8]       # a stem figure (a reaction scheme) sitting above option (a)
-    if above_figs: U.y0 = max(U.y0, max(above_figs) + 1)
-    top_row = min(ys)
-    a_ = ink(fitz.Rect(U.x0, U.y0, U.x1, top_row - 4)) if top_row - 4 - U.y0 > 6 else None
-    if a_ is not None:                                          # start the first row at the last blank band above its letters: no stem line or arrow bleeds in
-        prof = a_.any(axis=1); last = None; i = len(prof) - 1
-        while i >= 0:
-            if not prof[i]:
-                j = i
-                while j >= 0 and not prof[j]: j -= 1
-                if i - j >= 4: last = (j + 1 + i) / 2; break
-                i = j
-            else: i -= 1
-        if last is not None: U.y0 = U.y0 + last * 72 / 144
-    if max(xs) - min(xs) < 20:                                  # stacked
-        if min(ys[1] - ys[0], ys[2] - ys[1]) < 40: return "TEXT"
-        cuts = [U.y0] + [cut("y", ys[i] + 8, ys[i + 1] - 4, (ys[i] + ys[i + 1]) / 2) for i in range(3)] + [U.y1]
-        cells = [fitz.Rect(mk[L].x1 + 2, cuts[i], U.x1, cuts[i + 1]) & U for i, L in enumerate("abcd")]
-        if is_text["d"] or ys[3] - ys[2] < 40: cells[3] = None                  # a printed text line under three pictures ('(d) Both (a) and (b)')
-        return cells
-    if max(ys) - min(ys) < 20:                                  # one row
-        if min(xs[i + 1] - xs[i] for i in range(3)) < 40: return "TEXT"
-        cuts = [U.x0] + [cut("x", mk["abcd"[i]].x1 + 20, xs[i + 1] - 2, xs[i + 1] - 3) for i in range(3)] + [U.x1]
-        return [fitz.Rect(mk[L].x1 + 2, U.y0, cuts[i + 1], U.y1) for i, L in enumerate("abcd")]
-    if max(ys) - min(ys) < 40: return "TEXT"                    # 2x2, row-major: a b / c d
-    top = [L for L in "abcd" if ys["abcd".index(L)] < (max(ys) + min(ys)) / 2]
-    my = cut("y", min(mk[L].y0 for L in "cd") - 70 if False else max(mk[L].y0 for L in top) + 8, min(mk[L].y0 for L in "abcd" if L not in top) - 4, (max(ys) + min(ys)) / 2)
-    mx = cut("x", min(mk[L].x1 for L in "ac") + 20, min(mk[L].x0 for L in "bd") - 2, min(mk[L].x0 for L in "bd") - 3)
-    out = []
+    mk, side, prev_y = {}, {}, y_first - 8
     for L in "abcd":
-        is_top, left = mk[L].y0 < my, mk[L].x0 < mx
-        out.append(fitz.Rect(mk[L].x1 + 2, U.y0 if is_top else my, mx if left else U.x1, my if is_top else U.y1))
-    return out
+        hits = [h for h in page.search_for(f"({L})", clip=fitz.Rect(xr[col][0] - 16, max(y_lo, y_first - 8), xr[col][1], y_hi)) if h.y0 >= prev_y - 2]
+        c = col
+        if not hits and y_oc:                                  # the rest of the options sit at the top of the next column
+            hits = [h for h in page.search_for(f"({L})", clip=fitz.Rect(xr[oc][0] - 16, y_oc[0], xr[oc][1], y_oc[1])) if h.y0 >= (70 if not any(side[k] == oc for k in side) else prev_y - 2)]
+            c = oc
+        if not hits: return None
+        mk[L] = hits[0]; side[L] = c; prev_y = hits[0].y0 - 2
+    is_text = {L: any(abs(w[1] - mk[L].y0) < 3 and 0 <= w[0] - mk[L].x1 < 16 for w in words) for L in "abcd"}
+    if sum(is_text.values()) >= 2: return "TEXT"
+    owned = {L: [] for L in "abcd"}; sc = 2.0
+    for c in sorted(set(side.values())):
+        G = [L for L in "abcd" if side[L] == c]
+        top = min(mk[L].y0 for L in G) - 62                    # a stem scheme further above than any picture can reach is not an option
+        R = fitz.Rect(xr[c][0], max(top, y_lo if c == col else 70), xr[c][1], y_hi if c == col else min(y_oc[1], max(mk[L].y0 for L in G) + 90))
+        a = np.array(page.get_pixmap(dpi=144, clip=R, colorspace=fitz.csGRAY).pil_image()) < 200
+        for L in G:                                            # the printed letters and any text-option line are not picture ink
+            m = mk[L]; a[max(int((m.y0 - R.y0 - 1) * sc), 0):int((m.y1 - R.y0 + 1) * sc), max(int((m.x0 - R.x0 - 1) * sc), 0):int((m.x1 - R.x0 + 1) * sc)] = False
+            if is_text[L]: a[max(int((m.y0 - R.y0 - 2) * sc), 0):int((m.y1 - R.y0 + 2) * sc), :] = False
+        blob, n = ndimage.label(ndimage.binary_dilation(a, structure=np.ones((3, 3)), iterations=4))   # 4 px = 2 pt each way
+        for k, sl in enumerate(ndimage.find_objects(blob), 1):
+            if int((a[sl] & (blob[sl] == k)).sum()) < 25: continue          # specks
+            o = fitz.Rect(R.x0 + sl[1].start / sc, R.y0 + sl[0].start / sc, R.x0 + sl[1].stop / sc, R.y0 + sl[0].stop / sc)
+            if min(o.width, o.height) < 16 and (o.x0 <= R.x0 + 1.5 or o.x1 >= R.x1 - 1.5 or o.y1 >= R.y1 - 1.5): continue   # a fragment cut by the area's edge: the neighbouring column or the next line
+            row = [L for L in G if o.y0 - 10 <= mk[L].y0 <= o.y1 + 10 and o.x1 > mk[L].x1]
+            if not row: continue                                # touches no letter row: stem scheme, next question, stray text
+            rows_y = sorted({round(mk[L].y0 / 20) for L in row})
+            if len(rows_y) > 1:                                 # two pictures grew into one blob (labels almost touch): cut it at the widest blank rows between the letters
+                ls = sorted(row, key=lambda L: mk[L].y0); ls = [L for i, L in enumerate(ls) if i == 0 or abs(mk[L].y0 - mk[ls[i - 1]].y0) > 20]
+                sub = a[sl] & (blob[sl] == k); y0s = sl[0].start; cuts = [0]
+                for i in range(len(ls) - 1):
+                    lo, hi = int((mk[ls[i]].y0 - R.y0) * sc) - y0s, int((mk[ls[i + 1]].y0 - R.y0) * sc) - y0s
+                    lo, hi = max(lo, 0), min(hi, sub.shape[0])
+                    prof = sub[lo:hi].any(axis=1); best, run, st = (None, 0), 0, 0
+                    for j, v in enumerate(list(prof) + [True]):
+                        if not v:
+                            if run == 0: st = j
+                            run += 1
+                        else:
+                            if run > best[1]: best = (st, run)
+                            run = 0
+                    cuts.append(lo + (best[0] + best[1] // 2 if best[0] is not None else (hi - lo) // 2))
+                cuts.append(sub.shape[0])
+                for i, L in enumerate(ls):
+                    part = sub[cuts[i]:cuts[i + 1]]; yy, xx = np.nonzero(part)
+                    if len(xx): owned[L].append(fitz.Rect(R.x0 + (sl[1].start + xx.min()) / sc, R.y0 + (y0s + cuts[i] + yy.min()) / sc, R.x0 + (sl[1].start + xx.max() + 1) / sc, R.y0 + (y0s + cuts[i] + yy.max() + 1) / sc))
+                continue
+            near = [L for L in row if mk[L].x0 <= o.x0 + o.width / 2 + 2] or row
+            owned[max(near, key=lambda L: (mk[L].x0, -abs(mk[L].y0 - (o.y0 + o.y1) / 2)))].append(o + (2, 2, -2, -2))   # undo the 2 pt growth
+    if any(not owned[L] and not is_text[L] for L in "abcd"): return None
+    cells = []
+    for L in "abcd":
+        if is_text[L] or not owned[L]: cells.append(None); continue
+        u = fitz.Rect(owned[L][0])
+        for o in owned[L][1:]: u |= o
+        cells.append(u + (-4, -4, 4, 4))
+    return cells
 
 
 def tight(page, rect, path, m=6):

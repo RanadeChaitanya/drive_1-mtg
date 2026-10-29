@@ -10,7 +10,8 @@ text = {r["qid"] if r["qid"].startswith("Copy") else "Copy_of_0dea66c2_" + r["qi
 keys = {q["qid"]: q for q in json.load(open(sys.argv[3], encoding="utf-8"))["questions"]}
 out = []
 for suf in sys.argv[5:]:
-    qid = "Copy_of_0dea66c2_" + suf; r, t, k = route[qid], text[qid], keys.get(qid, {})
+    qid = "Copy_of_0dea66c2_" + suf; r, k = route[qid], keys.get(qid, {})
+    t = text.get(qid) or dict(stem=k.get("stem", r["stem_raw"]), options=k.get("options", {}))      # no model-cleaned text for this one: fall back to the extracted text
     opts = {}
     for L in "ABCD":
         v = (t.get("options") or {}).get(L, "")

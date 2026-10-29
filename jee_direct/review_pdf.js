@@ -1,6 +1,6 @@
 // KaTeX review page: extracted question (stem, options, key, figures) next to the printed region. node review_pdf.js <questions.json> <figs_dir> <regions_dir> <out.html> qid1 qid2 ...
 const fs = require("fs"), path = require("path");
-const nm = path.resolve(__dirname, "../qc/latex_tools/node_modules");
+const nm = process.env.KATEX_DIR || "D:/MSA/final-pipeline/qc/latex_tools/node_modules";   // read-only dependency of the original pipeline
 const katex = require(nm + "/katex"); require(nm + "/katex/dist/contrib/mhchem.min.js");
 const [, , src, figs, regs, out, ...ids] = process.argv;
 const Q = JSON.parse(fs.readFileSync(src, "utf8")).questions.filter(q => ids.includes(q.qid));
