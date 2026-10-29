@@ -28,7 +28,7 @@ for (pg, col), qs in by.items():
             fy0, fy1 = min(r.y0 for r in mine), max(r.y1 for r in mine)
             inside = {L.upper() for L, v in ys.items() if any(fy0 - 6 <= y <= fy1 + 6 for y in v)}
             if q["options"] and "IMAGE_OPTIONS" not in q["flags"] and len(inside) >= 3:   # (a)-(d) sit inside the drawing: those options are pictures, their text is label debris
-                q["option_text_original"] = q["options"]; q["options"] = {k: ("[figure option]" if k in inside and len(re.findall(r"[A-Za-z]{3,}", v)) < 2 else v) for k, v in q["options"].items()}; q["flags"].append("IMAGE_OPTIONS")   # an option printed below the drawing ('Both (a) and (b)') stays text
+                q["option_text_original"] = q["options"]; q["options"] = {k: ("[figure option]" if k in inside and not re.match(r"(Both|Neither|None of)\b", v) else v) for k, v in q["options"].items()}; q["flags"].append("IMAGE_OPTIONS")   # an option printed below the drawing ('Both (a) and (b)') stays text
             png = out / f"{q['qid']}_fig1.png"; page.get_pixmap(dpi=200, clip=box & page.rect).save(png); q["images"].append(png.name); n += 1
 src.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
 print(n, "figures cropped;", sum(1 for q in Q if q["images"]), "questions with a figure")

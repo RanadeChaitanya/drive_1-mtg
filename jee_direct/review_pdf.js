@@ -8,11 +8,11 @@ const esc = s => s.replace(/&/g, "&amp;").replace(/</g, "&lt;");
 const tex = t => (t || "").split(/(\$[^$]+\$)/).map(p => p.startsWith("$") && p.length > 1 ? katex.renderToString(p.slice(1, -1), { throwOnError: false }) : esc(p)).join("");
 const url = p => "file:///" + path.resolve(p).split(path.sep).join("/");
 const css = url(nm + "/katex/dist/katex.min.css");
-const card = q => `<div class="q"><div class="l"><b>${q.qid}</b> &middot; ${esc(q.chapter)} &middot; key <b>${q.correct_option || q.answer || "?"}</b>
+const card = q => `<div class="q"><div class="l"><b>${q.qid}</b> &middot; ${esc(q.chapter)} &middot; key <b>${q.correct_option || q.answer || "?"}</b>${(q.flags || []).filter(f => f !== "IMAGE_OPTIONS").map(f => ` <span class="fl">${f}</span>`).join("")}${q.key_note ? `<div class="n">${esc(q.key_note)}</div>` : ""}
 <p>${tex(q.stem)}</p>${Object.entries(q.options).map(([k, v]) => `<p>(${k}) ${tex(v)}</p>`).join("")}
 ${(q.images || []).map(i => `<img class="f" src="${url(path.join(figs, i))}">`).join("")}<div class="n">extracted text + cropped figure (the JSON)</div></div>
 <div class="r"><img src="${url(path.join(regs, q.qid + ".png"))}"><div class="n">printed page region (original)</div></div></div>`;
 fs.writeFileSync(out, `<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="${css}"><style>
 body{font-family:Georgia,serif;font-size:13px;margin:14px}.q{display:flex;gap:14px;border:1px solid #888;padding:8px;margin-bottom:12px;break-inside:avoid}
-.l,.r{flex:1;min-width:0}.f,.r img{max-width:100%}.n{color:#777;font-size:10px;margin-top:4px}p{margin:4px 0}</style>
+.l,.r{flex:1;min-width:0}.f,.r img{max-width:100%}.n{color:#777;font-size:10px;margin-top:4px}p{margin:4px 0}.fl{background:#fde68a;padding:0 4px;font-size:10px}</style>
 <h3>JEE OS DATA - extraction review (${Q.length} questions with figures)</h3>${Q.map(card).join("")}`);
