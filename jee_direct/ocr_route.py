@@ -151,6 +151,49 @@ def marker_cells(page, boxes, col=0, above=0, below=960):
     return cells
 
 
+def stem_blobs(page, col, y_lo, y_hi, skip=()):
+    """the figure(s) of the stem: ink blobs between the stem text and the next question, after blanking printed text lines (4+ words or wide),
+    the option letters and the option pictures already cut. Wide growth (7 pt) keeps a reaction scheme (reactant, arrow, reagent, product) in one piece."""
+    from scipy import ndimage
+    r = page.rect; mid = r.width / 2; xr = (70, mid + 12) if col == 0 else (mid + 4, r.width - 12)
+    R = fitz.Rect(xr[0], y_lo, xr[1], y_hi)
+    if R.height < 20: return []
+    sc = 2.0; a = np.array(page.get_pixmap(dpi=144, clip=R, colorspace=fitz.csGRAY).pil_image()) < 200
+    ws = [w for w in page.get_text("words") if fitz.Rect(w[:4]).intersects(R)]
+    lines = {}
+    for w in ws: lines.setdefault(round(w[3] / 3), []).append(w)
+    for ln in lines.values():
+        wide = max(w[2] for w in ln) - min(w[0] for w in ln)
+        if len(ln) >= 4 or wide > 110 or any(re.fullmatch(r"\([a-dA-D]\)", w[4]) for w in ln):
+            for w in ln: a[max(int((w[1] - R.y0 - 1) * sc), 0):int((w[3] - R.y0 + 1) * sc), max(int((w[0] - R.x0 - 1) * sc), 0):int((w[2] - R.x0 + 1) * sc)] = False
+    for c in skip:
+        a[max(int((c.y0 - R.y0 - 2) * sc), 0):int((c.y1 - R.y0 + 2) * sc), max(int((c.x0 - R.x0 - 2) * sc), 0):int((c.x1 - R.x0 + 2) * sc)] = False
+    blob, n = ndimage.label(ndimage.binary_dilation(a, structure=np.ones((3, 3)), iterations=14))
+    art = [fitz.Rect(d["rect"]) for d in page.get_drawings() if d.get("rect") is not None] + [fitz.Rect(i["bbox"]) for i in page.get_image_info()]
+    out = []
+    for k, sl in enumerate(ndimage.find_objects(blob), 1):
+        ink = a[sl] & (blob[sl] == k)
+        if ink.sum() < 80: continue
+        yy, xx = np.nonzero(ink)
+        o = fitz.Rect(R.x0 + (sl[1].start + xx.min()) / sc, R.y0 + (sl[0].start + yy.min()) / sc, R.x0 + (sl[1].start + xx.max() + 1) / sc, R.y0 + (sl[0].start + yy.max() + 1) / sc)
+        if (o.width < 14 and o.height < 14) or (o.height < 22 and o.width > 5 * o.height): continue   # specks; the site watermark banner
+        txt = " ".join(w[4] for w in ws if fitz.Rect(w[:4]).intersects(o))
+        if "JEEBOOKS" in txt or "KEY" in txt: continue                      # site watermark, answer-key grid
+        if not any(d.intersects(o) and d.width < R.width * 0.98 for d in art): continue    # only words: a stem line fragment, not a figure
+        out.append(o)
+    merged = True
+    while merged:                                                           # pieces of one scheme sitting on the same row (reactant ... arrow ... product)
+        merged = False
+        for i in range(len(out)):
+            for j in range(i + 1, len(out)):
+                a_, b_ = out[i], out[j]
+                if min(a_.y1, b_.y1) - max(a_.y0, b_.y0) > 0.5 * min(a_.height, b_.height) and max(a_.x0, b_.x0) - min(a_.x1, b_.x1) < 40:
+                    out[i] = a_ | b_; out.pop(j); merged = True; break
+            if merged: break
+    out = [o + (-4, -4, 4, 4) for o in out]
+    return sorted(out, key=lambda o: (o.y0, o.x0))
+
+
 def tight(page, rect, path, m=6):
     """render the cell, then cut to its ink so neighbouring white space (and nothing else) is removed"""
     pm = page.get_pixmap(dpi=200, clip=rect, colorspace=fitz.csGRAY); a = np.array(pm.pil_image()) < 200
@@ -191,8 +234,11 @@ def main():
                     else:
                         stem_boxes, cells = option_cells(png, grown)
                     if cells is None and mc != "TEXT": flags.append("PICTURES_NOT_SPLIT_INTO_4")
-                for i, b in enumerate(stem_boxes):
-                    p = figs / f"{qid}_fig{i + 1}.png"; crop(page, b, p); r["stem_images"].append(p.name)
+                skip = [c for c in (cells or []) if isinstance(c, fitz.Rect)]
+                y_lo_s = (q.get("text_bottom") or 0) / 1000 * page.rect.height + 1; y_hi_s = min(q["below"] / 1000 * page.rect.height, page.rect.height - 22) - 1
+                if cells and isinstance(cells[0], fitz.Rect): y_hi_s = min(y_hi_s, min(c.y0 for c in cells if isinstance(c, fitz.Rect)) - 1)   # picture options start where the stem figure ends
+                for i, o in enumerate(stem_blobs(page, q["col"], y_lo_s, y_hi_s, skip)):
+                    p = figs / f"{qid}_fig{i + 1}.png"; page.get_pixmap(dpi=200, clip=o & page.rect).save(p); r["stem_images"].append(p.name)
                 for L, c in zip("ABCD", cells or []):
                     if c is None: flags.append(f"OPTION_{L}_IS_TEXT"); continue
                     p = figs / f"{qid}_opt{L}.png"
