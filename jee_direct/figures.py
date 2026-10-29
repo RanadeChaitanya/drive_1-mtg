@@ -1,6 +1,6 @@
 """Crop the figures of each question (images + vector drawings inside the question's column/vertical range).
 python figures.py <pdf> <questions.json> <out_dir>      adds q["images"] = [relative png paths]; rewrites the json"""
-import json, sys
+import json, re, sys
 from pathlib import Path
 import fitz
 
@@ -24,10 +24,11 @@ for (pg, col), qs in by.items():
         page.get_pixmap(dpi=130, clip=fitz.Rect(x_lo + 8, top, x_hi - 4, min(bot, H - 22))).save(reg / f"{q['qid']}.png")
         if mine:                                            # one crop covering the figure group, padded
             box = fitz.Rect(x_lo + 8, min(r.y0 for r in mine) - 30, x_hi - 4, max(r.y1 for r in mine) + 30)   # full column width: atom labels / (a)-(d) letters are text outside the drawing cluster
-            ys = [r.y0 for L in "abcd" for r in page.search_for(f"({L})", clip=fitz.Rect(x_lo, top, x_hi, bot))]
+            ys = {L: [r.y0 for r in page.search_for(f"({L})", clip=fitz.Rect(x_lo, top, x_hi, bot))] for L in "abcd"}
             fy0, fy1 = min(r.y0 for r in mine), max(r.y1 for r in mine)
-            if q["options"] and "IMAGE_OPTIONS" not in q["flags"] and sum(fy0 - 6 <= y <= fy1 + 6 for y in ys) >= 3:        # (a)-(d) sit inside the drawing: the options are pictures, their text is label debris
-                q["option_text_original"] = q["options"]; q["options"] = {k: "[figure option]" for k in q["options"]}; q["flags"].append("IMAGE_OPTIONS")
+            inside = {L.upper() for L, v in ys.items() if any(fy0 - 6 <= y <= fy1 + 6 for y in v)}
+            if q["options"] and "IMAGE_OPTIONS" not in q["flags"] and len(inside) >= 3:   # (a)-(d) sit inside the drawing: those options are pictures, their text is label debris
+                q["option_text_original"] = q["options"]; q["options"] = {k: ("[figure option]" if k in inside and len(re.findall(r"[A-Za-z]{3,}", v)) < 2 else v) for k, v in q["options"].items()}; q["flags"].append("IMAGE_OPTIONS")   # an option printed below the drawing ('Both (a) and (b)') stays text
             png = out / f"{q['qid']}_fig1.png"; page.get_pixmap(dpi=200, clip=box & page.rect).save(png); q["images"].append(png.name); n += 1
 src.write_text(json.dumps(data, ensure_ascii=False, indent=1), encoding="utf-8")
 print(n, "figures cropped;", sum(1 for q in Q if q["images"]), "questions with a figure")
