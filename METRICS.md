@@ -28,3 +28,17 @@ Judge: strict Sonnet reading each crop against the full printed page (no human r
 
 Not proven: 99% (the judge is a model; the tuning pages overlap the test pages; 2 images still fail: a printed question number and a stray letter at the crop edge).
 Per picture question the loop costs roughly 2-3 Sonnet calls (about 10k tokens). Text-only questions need none of it.
+
+## Whole-book run: Copy_of_0dea66c2.pdf, question pages 5-106 (777 questions)
+
+Picture candidates = questions where the code found drawn art (177). Sonnet boxes every picture from gridded page strips, a second Sonnet judges each crop against the printed page, rejected ones go back with the judge's reasons (3 rounds).
+
+| Round | Images accepted | Questions clean |
+|---|---|---|
+| 1 (boxes from strips, judged) | 233 / 311 (74.9%) | 129 / 177 |
+| 2 (corrections from judge reasons) | 296 / 305 (97.0%) | 171 / 177 |
+| 3 (code whiteout of neighbour option / printed number, edge growth) | 298 / 304 (98.0%) | 174 / 177 (98.3%) |
+
+Of the 177 candidates, 58 turned out to have no picture (correct by default); on the 119 questions that really carry pictures, 116 are clean (97.5%).
+Still failing (6 images, 3 questions): p043 q21 options C/D and p048 q28 options B/C (neighbouring options touch within 1 px), p084 q12 options C/D (bottom bond clipped).
+Caveats: judge = Sonnet, not a human; only questions the code flagged as having art are judged (a picture the code missed is not counted); stem/option TEXT accuracy is measured separately.
