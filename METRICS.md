@@ -47,3 +47,18 @@ Caveats: judge = Sonnet, not a human; only questions the code flagged as having 
 Images accepted by BOTH judges: 286 / 298 (96.0%); judge 1 alone 98.0%. 12 images in 9 questions are in `review.pictures` of chem_final.json for a person to check.
 Tried and rejected: snapping boxes to ink (refine.py: 18/43 accepted, it erased real axis labels), blanket +3 pt margin (pulled in stray text). Kept: Sonnet nudging boxes on a 4x gridded zoom (+ clean_fragments.py for border fragments).
 Direct vs OCR route (10 OCR'd pages, 61 questions): stem text similarity mean 0.90 (44/61 >= 0.9), option text 0.77, OCR found 4 text options for 37 of 57 option questions.
+
+## Chemistry picture accuracy by method (strict Sonnet judge, 2026-11-01)
+| Method | Pictures accepted |
+|---|---|
+| Haiku boxes + 3 Haiku rounds, Haiku judges | 98.7% self-judged; 81.4% on a Sonnet audit (113 pictures) |
+| Haiku boxes + code post-processing (postproc.py) | 78.3-81.4% (all 318) |
+| PDF drawing-order route alone (stream_pics.py) | 54-64% (sample audits) |
+| Cluster ids assigned by Haiku (cluster_prep.py) | 48% |
+| Code-only clusters (code_pics.py, cluster_pics.py) | about 45% |
+| Haiku / DeepSeek image-to-SVG | 10% / 15% faithful (20 crops) |
+| SVG exported from PDF paths | 100% on 20 crops that already had a correct crop |
+| **Combined: Haiku boxes + PDF-path crop as fallback** | **89.9% (286 of 318); 93 of 118 picture questions fully clean** |
+
+Text: PDF text layer + Haiku repair of 474 doubtful questions; DeepSeek (deepseek_textfix.py) agrees with Haiku on 18.6% (unvalidated).
+Landing AI (v2 parse): one page tested; returned a single merged figure box for a page with five figures, so it does not split option pictures.

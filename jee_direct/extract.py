@@ -9,7 +9,57 @@ import fitz
 
 BANNER = re.compile(r"^(MCQs?\b.*|Numeric Value.*|Integer.*|Paragraph.*|Comprehension.*|Assertion.*|Match.*|Single Correct.*|Multiple Correct.*|Subjective.*|Solved Examples?.*|Exercise.*)$", re.I)
 GREEK = {"α": r"\alpha", "β": r"\beta", "γ": r"\gamma", "δ": r"\delta", "Δ": r"\Delta", "θ": r"\theta", "λ": r"\lambda", "μ": r"\mu", "ν": r"\nu", "π": r"\pi", "ρ": r"\rho",
-         "σ": r"\sigma", "τ": r"\tau", "φ": r"\phi", "ω": r"\omega", "Ω": r"\Omega", "ε": r"\varepsilon", "×": r"\times", "°": r"^\circ", "≤": r"\leq", "≥": r"\geq", "≠": r"\neq", "≈": r"\approx", "→": r"\rightarrow"}
+         "σ": r"\sigma", "τ": r"\tau", "φ": r"\phi", "ω": r"\omega", "Ω": r"\Omega", "ε": r"\varepsilon", "×": r"\times", "°": r"^\circ", "≤": r"\leq", "≥": r"\geq", "≠": r"\neq", "≈": r"\approx", "→": r"\rightarrow", "←": r"\leftarrow", "↔": r"\leftrightarrow", "⇒": r"\Rightarrow", "⇔": r"\Leftrightarrow",
+         "∩": r"\cap", "∪": r"\cup", "∈": r"\in", "∉": r"\notin", "⊂": r"\subset", "⊃": r"\supset", "∞": r"\infty", "∂": r"\partial", "∇": r"\nabla", "±": r"\pm", "÷": r"\div", "∠": r"\angle", "∅": r"\emptyset", "∝": r"\propto", "∫": r"\int", "∑": r"\sum", "∏": r"\prod", "√": r"\sqrt{}", "⋅": r"\cdot"}
+
+
+SYMBOL = {"\u00a3": "\u2264", "\u00b3": "\u2265", "\u00b4": "\u00d7", "\u00b1": "\u00b1", "\u00b9": "\u2260", "\u00bb": "\u2248", "\u00b5": "\u221d", "\u00ae": "\u2192",
+          "\u00ac": "\u2190", "\u00ab": "\u2194", "\u00de": "\u21d2", "\u00db": "\u21d4", "\u00dc": "\u21d0", "\u00c7": "\u2229", "\u00c8": "\u222a", "\u00ce": "\u2208",
+          "\u00cf": "\u2209", "\u00cc": "\u2282", "\u00cd": "\u2286", "\u00c9": "\u2283", "\u00c5": "\u2295", "\u00c4": "\u2297", "\u00b6": "\u2202", "\u00d1": "\u2207",
+          "\u00d6": "\u221a", "\u00a5": "\u221e", "\u00b8": "\u00f7", "\u00d0": "\u2220", "\u00c6": "\u2205", "\u00f2": "\u222b", "\u00e5": "\u2211", "\u00d5": "\u220f",
+          "\u00be": "", "\u00bd": "", "\u00b7": "\u2022", "\u00a2": "\u2032", "\u00d7": "\u22c5", "\u2212": "-"}
+SYMBOL_GREEK = dict(zip("abcdefghijklmnopqrstuvwxyz", "\u03b1\u03b2\u03c7\u03b4\u03b5\u03c6\u03b3\u03b7\u03b9\u03d5\u03ba\u03bb\u03bc\u03bd\u03bf\u03c0\u03b8\u03c1\u03c3\u03c4\u03c5\u03d6\u03c9\u03be\u03c8\u03b6"))
+SYMBOL_GREEK.update(zip("ABCDEFGHIJKLMNOPQRSTUVWXYZ", "\u0391\u0392\u03a7\u0394\u0395\u03a6\u0393\u0397\u0399\u03d1\u039a\u039b\u039c\u039d\u039f\u03a0\u0398\u03a1\u03a3\u03a4\u03a5\u03c2\u03a9\u039e\u03a8\u0396"))
+
+
+def fix_symbol(t, font):
+    """text set in the Adobe Symbol font: Latin letters are Greek, high Latin-1 chars are maths symbols and arrows; a run of arrow shafts is dropped"""
+    if "symbol" not in font.lower(): return t
+    return "".join(SYMBOL.get(c, SYMBOL_GREEK.get(c, c)) for c in t)
+
+
+def _art(page):
+    r = page.rect
+    art = [fitz.Rect(d["rect"]) for d in page.get_drawings() if d.get("rect") is not None and any(it[0] in ("l", "c", "qu") for it in d.get("items", [])) and d["rect"].width * d["rect"].height > 0] + [fitz.Rect(i["bbox"]) for i in page.get_image_info()]
+    return [a for a in art if a.get_area() < 0.5 * r.width * r.height and not (a.height < 2.5 and a.width > 150) and a.y1 > 70 and a.y0 < r.height - 30]
+
+
+def _texty(w):
+    return w.isalpha() and len(w) >= 3 and w[1:].islower()
+
+
+def drop_figure_labels(lines, art):
+    """a short, non-word span touching drawn art is a label of that figure (CH3, OH, Br, NO2 ...): it belongs to the picture, not to the question text.
+    Spans touching an already dropped label (the subscript 2 of CH2, the H after CO2) go with it."""
+    gap = lambda p, q: (max(p.x0 - q.x1, q.x0 - p.x1, 0) ** 2 + max(p.y0 - q.y1, q.y0 - p.y1, 0) ** 2) ** 0.5
+    keep_pat = re.compile(r"\(?[a-dA-D]\)?|\d{1,3}\.|\(?[ivxIVX]{1,4}\)?")
+    for l in lines:
+        txt = " ".join(sp["text"] for sp in l["spans"])
+        if sum(_texty(w) for w in txt.split()) >= 2 or len(txt) > 60: l["text_line"] = True
+    gone = []
+    for rnd in range(3):
+        for l in lines:
+            if l.get("text_line"): continue
+            keep = []
+            for sp in l["spans"]:
+                t = sp["text"].strip(); r = fitz.Rect(sp["bbox"])
+                lab = t and not (sp["flags"] & 16 and re.fullmatch(r"\d{1,3}\.?", t)) and len(t) <= 9 and not _texty(t) and not keep_pat.fullmatch(t) and not (t.islower() and len(t) >= 2 and t.isalpha())
+                near_art = lab and any(gap(r, a) <= (10 if len(t) <= 2 else 6) for a in art)
+                near_gone = lab and rnd > 0 and len(t) <= 3 and any(gap(r, g) <= 4 for g in gone)
+                if near_art or near_gone: gone.append(r); continue
+                keep.append(sp)
+            l["spans"] = keep
+    return [l for l in lines if l["spans"]]
 
 
 def script_text(t):
@@ -39,7 +89,7 @@ def row_text(spans, main, chem=False):
     base_y = base_y[len(base_y) // 2] if base_y else None
     out = ""
     for s in sorted(spans, key=lambda s: s["bbox"][0]):
-        t = s["text"]
+        t = fix_symbol(s["text"], s["font"])
         if base_y is not None and s["size"] < 0.88 * main and t.strip():
             kind = "sup" if s["origin"][1] < base_y - 1.2 else "sub" if s["origin"][1] > base_y + 1.2 else None
             if kind is None and re.search(r"_\{[^{}]*\}\$$", out):                    # 4d_{z^2}: a script riding on a subscript
@@ -81,8 +131,20 @@ def parse_page(page, state):
     for a in [l for l in lines if re.fullmatch(r"\d{1,3}", txt(l))]:                  # ANSWER KEY grid: '12' followed on the same baseline by '(b)' or '(731)'
         b = next((c for c in lines if re.fullmatch(r"\(\s*[a-dA-D\d.\-–, ]+\)", txt(c)) and abs(c["y1"] - a["y1"]) < 3 and 0 < c["x0"] - a["x1"] < 40), None)
         if b: grid[int(txt(a))] = txt(b).strip("() ").replace("–", "-"); lines.remove(a); lines.remove(b)
+    PAIR_ROW = re.compile(r"(?:\s*\d{1,3}\s*\([^()]{0,16}\))+\s*")                       # a row made ONLY of 'number (answer)' cells is an answer-key row
+    rows_g = {}
+    for l in lines: rows_g.setdefault(round(l["y1"] / 3), []).append(l)
+    for ls in rows_g.values():
+        ls.sort(key=lambda l: l["x0"]); t = " ".join(txt(l) for l in ls)
+        pairs = re.findall(r"(\d{1,3})\s*\(([^()]{0,16})\)", t)
+        if len(pairs) >= 2 and PAIR_ROW.fullmatch(t):
+            for n_, v in pairs:
+                v = v.strip().replace("\u2013", "-").replace("\u2212", "-").replace(" ", "")
+                if v: grid[int(n_)] = v
+            for l in ls: lines.remove(l)
     if grid:
         state["grids"].append(grid); state["keys"].setdefault(state.get("seg", 0), {}).update(grid)
+    lines = drop_figure_labels(lines, _art(page))
     header = [l for l in lines if l["y1"] < 70 or l["y0"] > H - 22]
     body = [l for l in lines if l not in header]
     for l in header:
@@ -106,7 +168,7 @@ def parse_page(page, state):
         m = re.match(r"^(\d{1,3})\.\s*(.*)$", raw)
         if m:
             num = int(m.group(1)); prev = state.get("prev", 0)
-            if not ((num == 1 and (prev == 0 or prev >= 5)) or prev < num <= prev + 3 or state.get("fresh")):          # '5.' ending a wrapped stem line is text, not a new question
+            if not ((num == 1 and (prev == 0 or prev >= 5) and (spans[0]["flags"] & 16 or prev == 0)) or prev < num <= prev + 3 or state.get("fresh")):          # '5.' ending a wrapped stem line is text, not a new question
                 m = None
         if m and (spans[0]["flags"] & 16 or len(raw) <= 4 or r["x0"] < (mid if r["col"] == 0 else W) * 0.35 + (0 if r["col"] == 0 else mid)):
             state["prev"], state["fresh"] = num, False
