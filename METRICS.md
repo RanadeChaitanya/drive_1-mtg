@@ -42,3 +42,8 @@ Picture candidates = questions where the code found drawn art (177). Sonnet boxe
 Of the 177 candidates, 58 turned out to have no picture (correct by default); on the 119 questions that really carry pictures, 116 are clean (97.5%).
 Still failing (6 images, 3 questions): p043 q21 options C/D and p048 q28 options B/C (neighbouring options touch within 1 px), p084 q12 options C/D (bottom bond clipped).
 Caveats: judge = Sonnet, not a human; only questions the code flagged as having art are judged (a picture the code missed is not counted); stem/option TEXT accuracy is measured separately.
+
+## Final Chemistry picture result (two independent Sonnet judges, zoom-fix round included)
+Images accepted by BOTH judges: 286 / 298 (96.0%); judge 1 alone 98.0%. 12 images in 9 questions are in `review.pictures` of chem_final.json for a person to check.
+Tried and rejected: snapping boxes to ink (refine.py: 18/43 accepted, it erased real axis labels), blanket +3 pt margin (pulled in stray text). Kept: Sonnet nudging boxes on a 4x gridded zoom (+ clean_fragments.py for border fragments).
+Direct vs OCR route (10 OCR'd pages, 61 questions): stem text similarity mean 0.90 (44/61 >= 0.9), option text 0.77, OCR found 4 text options for 37 of 57 option questions.
