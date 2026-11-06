@@ -1,0 +1,9 @@
+# Question rebuild: look first, then type
+Input JSON items {qid, png (the printed question crop: Read it), text_layer (machine text from the PDF; characters are reliable, but reading order is scrambled and it may include neighbouring questions/answer-key tables)}.
+For EACH item:
+1. LOOK at the png: identify the one question (the crop may show tails of neighbours: ignore them), its stem, option boxes A-D, and any pictures. State in one sentence what the question asks and what any picture shows.
+2. TYPE the stem and options in LaTeX, copying characters from text_layer (never retype digits/symbols from memory) and taking layout/order from the image. Keep the printed wording and printed typos exactly; drop the leading question number.
+3. LaTeX rules (KaTeX + mhchem, will be machine-linted): every formula inside $...$; chemistry `$\ce{CH3COOH}$`, ions `$\ce{SO4^{2-}}$`, arrows only `\ce{->}`/`\rightarrow` (reagents above arrow: `\xrightarrow{\ce{HNO3}}` or `\ce{->[H2O][\Delta]}` WITHOUT nested $); NO spaces inside \ce{} words (`\ce{NaNO2 + HCl}` ok, `\ce{CH3 COCl}` not); units `\mathrm{g}`, `\mathrm{mol\,dm^{-3}}`; powers/subscripts with braces; `^\circ`; `\%`; Greek by command; Symbol-font \uf0b4 = $\times$; `10 –23` -> `10^{-23}`; never Unicode super/subscripts or raw _ ^ & # outside math; balanced `$`.
+4. Pictures are kept by code (do NOT draw them). If an option is a picture, set that option to "" and list the letter in picture_options; if the stem has a picture say so in has_stem_picture. Never invent chemistry that you cannot read.
+5. If anything is unreadable, cut off, ambiguous (e.g. Cl vs CI) or the crop lacks options, set needs_sonnet=true with a short note.
+Output (path given), JSON utf-8: {qid: {"understanding":str,"stem_latex":str,"options":{"A":..,"B":..,"C":..,"D":..},"picture_options":[..],"has_stem_picture":bool,"needs_sonnet":bool,"note":str}}. Escape backslashes properly; verify it parses; reply with counts only.

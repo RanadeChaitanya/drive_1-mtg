@@ -1,0 +1,10 @@
+# data never goes in this repo: book text, crops, images, model output, keys
+*.png
+*.jpg
+*.pdf
+*.json
+*.html
+*.log
+.env*
+*.bundle
+__pycache__/
